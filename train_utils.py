@@ -40,10 +40,8 @@ def train_model(criterion, epoch, model, model_type, optimizer, train_iter, batc
             # For MNIST classifier
             model_out, out_labels = model_out
             pred = out_labels.max(1, keepdim=True)[1]
-            correct_sum += pred.eq(labels.view_as(pred)).sum().item()
-            # Calculate loss
-            mse_loss, ce_loss = criterion(model_out, data, out_labels, labels)
-            loss = mse_loss + ce_loss
+            print(pred)
+            loss = criterion(model_out, data)
         elif model_type == 'LSTMAE_PRED':
             # For S&P prediction
             model_out, preds = model_out
@@ -99,6 +97,7 @@ def eval_model(criterion, model, model_type, val_iter, mode='Validation'):
     model.eval()
     loss_sum = 0
     correct_sum = 0
+    rst_label = []
     with torch.no_grad():
         for data in val_iter:
             if len(data) == 2:
@@ -110,10 +109,9 @@ def eval_model(criterion, model, model_type, val_iter, mode='Validation'):
             if model_type == 'LSTMAE_CLF':
                 model_out, out_labels = model_out
                 pred = out_labels.max(1, keepdim=True)[1]
-                correct_sum += pred.eq(labels.view_as(pred)).sum().item()
-                # Calculate loss
-                mse_loss, ce_loss = criterion(model_out, data, out_labels, labels)
-                loss = mse_loss + ce_loss
+                loss = criterion(model_out, data)
+                if mode == 'Test':
+                    rst_label.extend(pred.view(-1).tolist())
             elif model_type == 'LSTMAE_PRED':
                 # For S&P prediction
                 model_out, preds = model_out
@@ -130,4 +128,4 @@ def eval_model(criterion, model, model_type, val_iter, mode='Validation'):
     val_acc = round(correct_sum / len(val_iter.dataset) * 100, 2)
     acc_out_str = f'; Average Accuracy: {val_acc}' if model_type == 'LSTMAECLF' else ''
     print(f' {mode}: Average Loss: {val_loss}{acc_out_str}')
-    return val_loss, val_acc
+    return val_loss, val_acc, rst_label

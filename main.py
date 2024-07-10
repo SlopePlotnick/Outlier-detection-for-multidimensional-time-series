@@ -6,12 +6,13 @@ import numpy as np
 import torch
 
 from models.LSTMAE import LSTMAE
+from models.LSTMAE_CLF import LSTMAECLF
 from train_utils import train_model, eval_model
 
 parser = argparse.ArgumentParser(description='LSTM_AE TOY EXAMPLE')
 parser.add_argument('--batch-size', type=int, default=128, metavar='N',
                     help='input batch size for training (default: 128)')
-parser.add_argument('--epochs', type=int, default=10, metavar='N', help='number of epochs to train')
+parser.add_argument('--epochs', type=int, default=1, metavar='N', help='number of epochs to train')
 parser.add_argument('--optim', default='Adam', type=str, help='Optimizer to use')
 parser.add_argument('--hidden-size', type=int, default=256, metavar='N', help='LSTM hidden state size')
 parser.add_argument('--lr', type=float, default=0.001, metavar='LR', help='learning rate')
@@ -20,9 +21,10 @@ parser.add_argument('--dropout', type=float, default=0.0, metavar='D', help='dro
 parser.add_argument('--wd', type=float, default=0, metavar='WD', help='weight decay')
 parser.add_argument('--grad-clipping', type=float, default=None, metavar='GC', help='gradient clipping value')
 parser.add_argument('--log-interval', type=int, default=10, metavar='N', help='how many batch iteration to log status')
-parser.add_argument('--model-type', default='LSTMAE', help='currently only LSTMAE')
+parser.add_argument('--model-type', default='LSTMAE_CLF', help='currently only LSTMAE')
 parser.add_argument('--model-dir', default='trained_models', help='directory of model for saving checkpoint')
 parser.add_argument('--seq-len', default=50, help='sequence full size')
+parser.add_argument('--n-classes', default=2, help='number of classes in case of a lstm ae with clf')
 parser.add_argument('--run-grid-search', action='store_true', default=False, help='Running hyper-parameters grid search')
 
 args = parser.parse_args(args=[])
@@ -50,7 +52,9 @@ def main():
     train_iter, val_iter, test_iter = create_dataloaders(args.batch_size)
 
     # Create model
-    model = LSTMAE(input_size=args.input_size, hidden_size=args.hidden_size, dropout_ratio=args.dropout, seq_len=args.seq_len)
+    # model = LSTMAE(input_size=args.input_size, hidden_size=args.hidden_size, dropout_ratio=args.dropout, seq_len=args.seq_len)
+    model = LSTMAECLF(input_size=args.input_size, hidden_size=args.hidden_size, dropout_ratio=args.dropout,
+                      n_classes=args.n_classes, seq_len=args.seq_len)
     model.to(device)
 
     # Create optimizer & loss functions
@@ -65,17 +69,19 @@ def main():
     # Train & Val
     for epoch in range(args.epochs):
         # Train loop
-        train_model(criterion, epoch, model, args.model_type, optimizer, train_iter, args.batch_size, args.grad_clipping,
-                    args.log_interval)
+        train_model(criterion, epoch, model, args.model_type, optimizer, train_iter, args.batch_size, args.grad_clipping, args.log_interval)
         eval_model(criterion, model, args.model_type, val_iter)
-    eval_model(criterion, model, args.model_type, test_iter, mode='Test')
+
+    test_loss, test_acc, rst_label = eval_model(criterion, model, args.model_type, test_iter, mode='Test')
+    print("rst_label")
+    print(rst_label)
 
     # Save model
     torch.save(model.state_dict(), os.path.join(args.model_dir, f'model_hs={args.hidden_size}_bs={args.batch_size}'
                                                                 f'_epochs={args.epochs}_clip={args.grad_clipping}.pt'))
 
     # Plot original images and their corresponding reconstructed images
-    plot_orig_vs_reconstructed(model, test_iter)
+    # plot_orig_vs_reconstructed(model, test_iter)
 
 
 def create_toy_data(num_of_sequences=132481, sequence_len=25) -> torch.tensor:
@@ -99,7 +105,21 @@ def create_toy_data(num_of_sequences=132481, sequence_len=25) -> torch.tensor:
     # 将数组转化为tensor
     toy_data = torch.tensor(train_features, dtype=torch.float)  # Size: 132481 * 25
 
-    return toy_data
+    # Random uniform distribution
+    test_df = pd.read_csv('test.csv')
+
+    # 提取特性数据和标签
+    test_features = test_df.drop(columns=['timestamp_(min)'], axis=1).values.reshape(-1, 25, 1)  # Shape: 132481 * 25
+    # 判断是否存在空值
+    print(np.isnan(test_features).any())
+    # 填补空值
+    test_features = np.nan_to_num(test_features, nan=0.0)
+    # train_features = train_df.drop(columns=['timestamp_(min)']).values  # Shape: 132481 * 25
+
+    # 将数组转化为tensor
+    toy_test_data = torch.tensor(test_features, dtype=torch.float)  # Size: 132481 * 25
+
+    return toy_data, toy_test_data
 
 
 def create_dataloaders(batch_size, train_ratio=0.6, val_ratio=0.2):
@@ -107,17 +127,16 @@ def create_dataloaders(batch_size, train_ratio=0.6, val_ratio=0.2):
     Build train, validation and tests dataloader using the toy data
     :return: Train, validation and test data loaders
     """
-    toy_data = create_toy_data()
+    toy_data, toy_test_data = create_toy_data()
     len = toy_data.shape[0]
 
     train_data = toy_data[:int(len * train_ratio), :]
     val_data = toy_data[int(train_ratio * len):int(len * (train_ratio + val_ratio)), :]
-    test_data = toy_data[int((train_ratio + val_ratio) * len):, :]
 
-    print(f'Datasets shapes: Train={train_data.shape}; Validation={val_data.shape}; Test={test_data.shape}')
+    print(f'Datasets shapes: Train={train_data.shape}; Validation={val_data.shape}; Test={toy_test_data.shape}')
     train_iter = torch.utils.data.DataLoader(toy_dataset(train_data), batch_size=batch_size, shuffle=True)
     val_iter = torch.utils.data.DataLoader(toy_dataset(val_data), batch_size=batch_size, shuffle=True)
-    test_iter = torch.utils.data.DataLoader(toy_dataset(test_data), batch_size=batch_size, shuffle=False)
+    test_iter = torch.utils.data.DataLoader(toy_dataset(toy_test_data), batch_size=batch_size, shuffle=False)
 
     return train_iter, val_iter, test_iter
 
