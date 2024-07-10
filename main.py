@@ -7,7 +7,7 @@ import torch
 
 from models.LSTMAE import LSTMAE
 from models.LSTMAE_CLF import LSTMAECLF
-from train_utils import train_model, eval_model
+from train_utils import train_model, eval_model, test_model
 
 parser = argparse.ArgumentParser(description='LSTM_AE TOY EXAMPLE')
 parser.add_argument('--batch-size', type=int, default=128, metavar='N',
@@ -21,7 +21,7 @@ parser.add_argument('--dropout', type=float, default=0.0, metavar='D', help='dro
 parser.add_argument('--wd', type=float, default=0, metavar='WD', help='weight decay')
 parser.add_argument('--grad-clipping', type=float, default=None, metavar='GC', help='gradient clipping value')
 parser.add_argument('--log-interval', type=int, default=10, metavar='N', help='how many batch iteration to log status')
-parser.add_argument('--model-type', default='LSTMAE_CLF', help='currently only LSTMAE')
+parser.add_argument('--model-type', default='LSTMAE', help='currently only LSTMAE')
 parser.add_argument('--model-dir', default='trained_models', help='directory of model for saving checkpoint')
 parser.add_argument('--seq-len', default=50, help='sequence full size')
 parser.add_argument('--n-classes', default=2, help='number of classes in case of a lstm ae with clf')
@@ -49,17 +49,18 @@ class toy_dataset(torch.utils.data.Dataset):
 
 def main():
     # Create data loaders
-    train_iter, val_iter, test_iter = create_dataloaders(args.batch_size)
+    train_iter, val_iter, test_iter, timestamp = create_dataloaders(args.batch_size)
 
     # Create model
-    # model = LSTMAE(input_size=args.input_size, hidden_size=args.hidden_size, dropout_ratio=args.dropout, seq_len=args.seq_len)
-    model = LSTMAECLF(input_size=args.input_size, hidden_size=args.hidden_size, dropout_ratio=args.dropout,
-                      n_classes=args.n_classes, seq_len=args.seq_len)
+    model = LSTMAE(input_size=args.input_size, hidden_size=args.hidden_size, dropout_ratio=args.dropout, seq_len=args.seq_len)
+    # model = LSTMAECLF(input_size=args.input_size, hidden_size=args.hidden_size, dropout_ratio=args.dropout,
+    #                   n_classes=args.n_classes, seq_len=args.seq_len)
     model.to(device)
 
     # Create optimizer & loss functions
     optimizer = getattr(torch.optim, args.optim)(params=model.parameters(), lr=args.lr, weight_decay=args.wd)
     criterion = torch.nn.MSELoss(reduction='sum')
+    criterion_test = torch.nn.MSELoss(reduction='none')
 
     # Grid search run if run-grid-search flag is active
     if args.run_grid_search:
@@ -72,9 +73,7 @@ def main():
         train_model(criterion, epoch, model, args.model_type, optimizer, train_iter, args.batch_size, args.grad_clipping, args.log_interval)
         eval_model(criterion, model, args.model_type, val_iter)
 
-    test_loss, test_acc, rst_label = eval_model(criterion, model, args.model_type, test_iter, mode='Test')
-    print("rst_label")
-    print(rst_label)
+    result = test_model(criterion_test, model, args.model_type, test_iter, timestamp)
 
     # Save model
     torch.save(model.state_dict(), os.path.join(args.model_dir, f'model_hs={args.hidden_size}_bs={args.batch_size}'
@@ -82,6 +81,11 @@ def main():
 
     # Plot original images and their corresponding reconstructed images
     # plot_orig_vs_reconstructed(model, test_iter)
+
+    # save results
+    df = pd.DataFrame(result.tolist())
+    df.columns = ["timestamp_(min)", "label"]
+    df.to_csv("result.csv", index=False)
 
 
 def create_toy_data(num_of_sequences=132481, sequence_len=25) -> torch.tensor:
@@ -110,6 +114,8 @@ def create_toy_data(num_of_sequences=132481, sequence_len=25) -> torch.tensor:
 
     # 提取特性数据和标签
     test_features = test_df.drop(columns=['timestamp_(min)'], axis=1).values.reshape(-1, 25, 1)  # Shape: 132481 * 25
+    timestamp = torch.tensor(list(test_df['timestamp_(min)']))
+    timestamp = timestamp.view(-1, 1)
     # 判断是否存在空值
     print(np.isnan(test_features).any())
     # 填补空值
@@ -119,15 +125,15 @@ def create_toy_data(num_of_sequences=132481, sequence_len=25) -> torch.tensor:
     # 将数组转化为tensor
     toy_test_data = torch.tensor(test_features, dtype=torch.float)  # Size: 132481 * 25
 
-    return toy_data, toy_test_data
+    return toy_data, toy_test_data, timestamp
 
 
-def create_dataloaders(batch_size, train_ratio=0.6, val_ratio=0.2):
+def create_dataloaders(batch_size, train_ratio=0.8, val_ratio=0.2):
     """
     Build train, validation and tests dataloader using the toy data
     :return: Train, validation and test data loaders
     """
-    toy_data, toy_test_data = create_toy_data()
+    toy_data, toy_test_data, timestamp = create_toy_data()
     len = toy_data.shape[0]
 
     train_data = toy_data[:int(len * train_ratio), :]
@@ -138,7 +144,7 @@ def create_dataloaders(batch_size, train_ratio=0.6, val_ratio=0.2):
     val_iter = torch.utils.data.DataLoader(toy_dataset(val_data), batch_size=batch_size, shuffle=True)
     test_iter = torch.utils.data.DataLoader(toy_dataset(toy_test_data), batch_size=batch_size, shuffle=False)
 
-    return train_iter, val_iter, test_iter
+    return train_iter, val_iter, test_iter, timestamp
 
 
 def plot_toy_data(toy_example, description, color='b'):

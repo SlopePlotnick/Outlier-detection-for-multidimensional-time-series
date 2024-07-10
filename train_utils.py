@@ -40,8 +40,10 @@ def train_model(criterion, epoch, model, model_type, optimizer, train_iter, batc
             # For MNIST classifier
             model_out, out_labels = model_out
             pred = out_labels.max(1, keepdim=True)[1]
-            print(pred)
-            loss = criterion(model_out, data)
+            correct_sum += pred.eq(labels.view_as(pred)).sum().item()
+            # Calculate loss
+            mse_loss, ce_loss = criterion(model_out, data, out_labels, labels)
+            loss = mse_loss + ce_loss
         elif model_type == 'LSTMAE_PRED':
             # For S&P prediction
             model_out, preds = model_out
@@ -97,7 +99,6 @@ def eval_model(criterion, model, model_type, val_iter, mode='Validation'):
     model.eval()
     loss_sum = 0
     correct_sum = 0
-    rst_label = []
     with torch.no_grad():
         for data in val_iter:
             if len(data) == 2:
@@ -109,9 +110,10 @@ def eval_model(criterion, model, model_type, val_iter, mode='Validation'):
             if model_type == 'LSTMAE_CLF':
                 model_out, out_labels = model_out
                 pred = out_labels.max(1, keepdim=True)[1]
-                loss = criterion(model_out, data)
-                if mode == 'Test':
-                    rst_label.extend(pred.view(-1).tolist())
+                correct_sum += pred.eq(labels.view_as(pred)).sum().item()
+                # Calculate loss
+                mse_loss, ce_loss = criterion(model_out, data, out_labels, labels)
+                loss = mse_loss + ce_loss
             elif model_type == 'LSTMAE_PRED':
                 # For S&P prediction
                 model_out, preds = model_out
@@ -128,4 +130,33 @@ def eval_model(criterion, model, model_type, val_iter, mode='Validation'):
     val_acc = round(correct_sum / len(val_iter.dataset) * 100, 2)
     acc_out_str = f'; Average Accuracy: {val_acc}' if model_type == 'LSTMAECLF' else ''
     print(f' {mode}: Average Loss: {val_loss}{acc_out_str}')
-    return val_loss, val_acc, rst_label
+    return val_loss, val_acc
+
+
+def test_model(criterion, model, model_type, test_iter, timestamp):
+    """
+    Function to run validation on given model
+    :param criterion: loss function
+    :param model: pytorch model object
+    :param model_type: model type (only ae/ ae+clf), used to know if needs to calculate accuracy
+    :param val_iter: validation dataloader
+    :return abnormal samples prediction
+    """
+    model.eval()
+    loss = None
+    test_num = len(test_iter.dataset)
+    with torch.no_grad():
+        for data in test_iter:
+            data = data.to(device)
+
+            model_out = model(data)
+            if loss == None:
+                loss = criterion(model_out, data).mean(1)
+            else:
+                loss = torch.cat([loss, criterion(model_out, data).mean(1)])
+
+    loss_top, index = loss.topk(int(test_num * 0.1), dim=0)
+    result = torch.zeros((test_num, 1))
+    result[index, 0] = 1
+
+    return torch.cat([timestamp, result], dim=1)
